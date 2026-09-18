@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="horizontal"
+    android:background="#07111F">
+
+    <org.webrtc.SurfaceViewRenderer
+        android:id="@+id/preview"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1" />
+
+    <ScrollView
+        android:layout_width="340dp"
+        android:layout_height="match_parent"
+        android:fillViewport="true"
+        android:background="#F8FAFC">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="20dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="PhonePilot Camera"
+                android:textStyle="bold"
+                android:textSize="24sp"
+                android:textColor="#10213F" />
+
+            <EditText
+                android:id="@+id/serverUrl"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="18dp"
+                android:hint="ws://192.168.1.10:8080"
+                android:inputType="textUri"
+                android:singleLine="true" />
+
+            <EditText
+                android:id="@+id/robotId"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="robot_001"
+                android:singleLine="true" />
+
+            <EditText
+                android:id="@+id/robotName"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="Courier Alpha"
+                android:singleLine="true" />
+
+            <Button
+                android:id="@+id/connectButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:text="CONNECT" />
+
+            <Button
+                android:id="@+id/disconnectButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="DISCONNECT" />
+
+            <Button
+                android:id="@+id/switchCameraButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="SWITCH CAMERA" />
+
+            <Button
+                android:id="@+id/hotspotButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="START ESP32 HOTSPOT" />
+
+            <TextView
+                android:id="@+id/hotspotCredentials"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="Hotspot: stopped"
+                android:textColor="#334155"
+                android:textIsSelectable="true"
+                android:textSize="13sp" />
+
+            <Button
+                android:id="@+id/sendWifiCredentialsButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:enabled="false"
+                android:text="SEND WI-FI TO ESP32 VIA USB" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:text="ESP32 CONTROL LINK"
+                android:textColor="#10213F"
+                android:textSize="13sp"
+                android:textStyle="bold" />
+
+            <RadioGroup
+                android:id="@+id/transportModeGroup"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <RadioButton
+                    android:id="@+id/usbTransportButton"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:checked="true"
+                    android:text="USB CABLE" />
+
+                <RadioButton
+                    android:id="@+id/wifiTransportButton"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="WI-FI HOTSPOT" />
+            </RadioGroup>
+
+            <TextView
+                android:id="@+id/viewers"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="18dp"
+                android:text="Viewers: 0/4 · nobody connected"
+                android:textColor="#10213F"
+                android:textStyle="bold"
+                android:textSize="14sp" />
+
+            <TextView
+                android:id="@+id/status"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="Server: disconnected\nCamera: starting\nWebRTC: idle\nESP32: disconnected\nServo: —"
+                android:textColor="#334155"
+                android:textSize="14sp" />
+        </LinearLayout>
+    </ScrollView>
+</LinearLayout>
