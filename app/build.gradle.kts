@@ -14,8 +14,8 @@ android {
         applicationId = "com.robroute.camera"
         minSdk = 26
         targetSdk = 35
-        versionCode = 7
-        versionName = "0.10.0"
+        versionCode = 9
+        versionName = "0.11.0"
     }
 
     buildFeatures {

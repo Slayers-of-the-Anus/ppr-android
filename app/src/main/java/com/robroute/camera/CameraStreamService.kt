@@ -141,6 +141,9 @@ class CameraStreamService : Service() {
         return servoController.configureWifi(hotspot.ssid, hotspot.password)
     }
 
+    fun sendBoardConfigurationOverUsb(mode: String, ssid: String, password: String): Boolean =
+        servoController.configureMode(mode, ssid, password)
+
     fun setServoTransportMode(mode: ServoTransportMode) {
         getSharedPreferences("robroute", MODE_PRIVATE).edit().putString("servoTransport", mode.name).apply()
         servoController.setTransportMode(mode)

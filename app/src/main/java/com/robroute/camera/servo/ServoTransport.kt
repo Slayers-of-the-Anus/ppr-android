@@ -9,6 +9,7 @@ sealed interface ServoTransportState {
 enum class ServoTransportMode {
     USB,
     WIFI,
+    SHARED,
 }
 
 object ServoErrorCode {
@@ -38,4 +39,5 @@ interface ServoTransport {
     fun moveTo(angle: Int)
     fun requestStatus()
     fun configureWifi(ssid: String, password: String)
+    fun configureMode(mode: String, ssid: String, password: String)
 }

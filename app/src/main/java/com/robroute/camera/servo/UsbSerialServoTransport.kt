@@ -99,6 +99,16 @@ class UsbSerialServoTransport(
         writeLine("WIFI_CONFIG $ssidEncoded $passwordEncoded")
     }
 
+    override fun configureMode(mode: String, ssid: String, password: String) {
+        if (mode == "USB") {
+            writeLine("CONFIG USB")
+            return
+        }
+        val ssidEncoded = Base64.encodeToString(ssid.toByteArray(StandardCharsets.UTF_8), Base64.NO_WRAP)
+        val passwordEncoded = Base64.encodeToString(password.toByteArray(StandardCharsets.UTF_8), Base64.NO_WRAP)
+        writeLine("CONFIG $mode $ssidEncoded $passwordEncoded")
+    }
+
     private fun registerReceivers() {
         ContextCompat.registerReceiver(
             appContext, permissionReceiver, IntentFilter(permissionAction), ContextCompat.RECEIVER_NOT_EXPORTED,
@@ -188,7 +198,7 @@ class UsbSerialServoTransport(
                 return@execute
             }
             try {
-                Log.i(TAG, "TX: $command")
+                Log.i(TAG, "TX: ${if (command.startsWith("CONFIG ") || command.startsWith("WIFI_CONFIG ")) "[redacted configuration]" else command}")
                 selectedPort.write("$command\n".toByteArray(StandardCharsets.US_ASCII), WRITE_TIMEOUT_MS)
             } catch (error: Throwable) {
                 listener.onTransportError(ServoErrorCode.SERIAL_WRITE_FAILED, error.message ?: error.javaClass.simpleName)

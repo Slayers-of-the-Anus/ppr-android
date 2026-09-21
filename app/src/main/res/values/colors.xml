@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="app_background">#07111F</color>
+    <color name="panel">#0E1B2E</color>
+    <color name="panel_inset">#091524</color>
+    <color name="panel_border">#21344D</color>
+    <color name="divider">#1D3048</color>
+    <color name="brand">#46E6B0</color>
+    <color name="brand_pressed">#2FC795</color>
+    <color name="ink">#041019</color>
+    <color name="text_primary">#F3F7FC</color>
+    <color name="text_secondary">#B5C3D6</color>
+    <color name="text_muted">#75869D</color>
+    <color name="success">#4ADE80</color>
+    <color name="warning">#FBBF24</color>
+    <color name="button_secondary">#1B2B41</color>
+    <color name="button_secondary_pressed">#263A55</color>
+</resources>

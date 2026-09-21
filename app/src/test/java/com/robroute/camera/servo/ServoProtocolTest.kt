@@ -68,4 +68,11 @@ class ServoProtocolTest {
         assertEquals(null, WifiServoTransport.parseDiscoveryPort("OTHER_DEVICE port=3333"))
         assertEquals(null, WifiServoTransport.parseDiscoveryPort("PHONEPILOT_ESP32 port=70000"))
     }
+
+    @Test fun parsesConfigurationConfirmation() {
+        assertEquals(
+            ServoResponse.ConfigSaved("SHARED"),
+            ServoLineParser.parseLine("OK CONFIG_SAVED mode=SHARED"),
+        )
+    }
 }

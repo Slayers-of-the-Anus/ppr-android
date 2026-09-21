@@ -47,4 +47,8 @@ ESP32 replies with `OK WIFI_SAVED`, then `WIFI CONNECTING` and `WIFI CONNECTED i
 
 After joining the hotspot, ESP32 broadcasts `PHONEPILOT_ESP32 port=3333` to UDP port 3334 every 1.5 seconds and accepts the same ASCII command protocol over TCP port 3333. `WifiServoTransport` discovers, connects and reconnects automatically. The USB path remains active for provisioning and available as the alternative control mode.
 
+## Shared-router setup without phone-to-board USB
+
+The Setup screen can fill the shared network's SSID from the phone's current Wi-Fi connection after location permission. Android does not expose the saved Wi-Fi password to third-party apps, so the user enters it. The password is not stored in SharedPreferences or activity state. The board advertises a temporary WPA2 `PhonePilot-Setup-XXXXXX` AP at boot; its unique generated password is printed in the Arduino Serial Monitor after flashing and retained in ESP32 NVS. Android uses `WifiNetworkSpecifier` with a system approval dialog, then a socket bound to that temporary network to send `CONFIG SHARED <base64-ssid> <base64-password>` to `192.168.4.1:3333`. The board acknowledges before switching networks. Alternatively the same `CONFIG` command can be sent over USB. Once ESP32 joins the shared router, the existing UDP discovery/TCP control path is reused. The server must be reachable on that LAN; router client isolation must be disabled.
+
 The firmware-side contract is in `../../esp32-firmware/docs/SERIAL_PROTOCOL.md`.

@@ -8,6 +8,7 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.SocketTimeoutException
 import java.nio.charset.StandardCharsets
+import android.os.SystemClock
 import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
 
@@ -45,6 +46,10 @@ class WifiServoTransport(
         )
     }
 
+    override fun configureMode(mode: String, ssid: String, password: String) {
+        listener.onTransportError(ServoErrorCode.WIFI_WRITE_FAILED, "Use the ESP32 setup connection or USB to change modes")
+    }
+
     private fun enqueue(command: String) {
         if (!started || socket?.isConnected != true) {
             listener.onTransportError(ServoErrorCode.WIFI_DISCONNECTED, "ESP32 Wi-Fi link is not connected")
@@ -54,7 +59,7 @@ class WifiServoTransport(
     }
 
     private fun connectionLoop() {
-        listener.onTransportState(ServoTransportState.Disconnected("searching on phone hotspot"))
+        listener.onTransportState(ServoTransportState.Disconnected("searching on local Wi-Fi"))
         while (started) {
             val endpoint = discoverEsp32() ?: continue
             if (!started) break
@@ -121,19 +126,23 @@ class WifiServoTransport(
         connected.tcpNoDelay = true
         connected.soTimeout = READ_TIMEOUT_MS
         socket = connected
-        listener.onTransportState(ServoTransportState.Connected("Wi-Fi ${endpoint.address.hostAddress}"))
 
         val input = connected.getInputStream()
         val output = BufferedOutputStream(connected.getOutputStream())
+        // Send the handshake synchronously. Queuing it from the state callback can leave
+        // a TCP connection looking healthy even though no command has reached the ESP32.
+        writeCommand(output, "STATUS")
+        var lastStatusQueryAt = SystemClock.elapsedRealtime()
+        var lastReceiveAt = 0L
+        val connectedAt = lastStatusQueryAt
+        listener.onTransportState(ServoTransportState.Connected("Wi-Fi ${endpoint.address.hostAddress}"))
+
         val buffer = ByteArray(512)
         while (started && !connected.isClosed) {
             var command = commands.poll()
             while (command != null) {
-                val bytes = "$command\n".toByteArray(StandardCharsets.US_ASCII)
                 try {
-                    output.write(bytes)
-                    output.flush()
-                    Log.d(TAG, "TX: $command")
+                    writeCommand(output, command)
                 } catch (error: Throwable) {
                     listener.onTransportError(
                         ServoErrorCode.WIFI_WRITE_FAILED,
@@ -143,14 +152,32 @@ class WifiServoTransport(
                 }
                 command = commands.poll()
             }
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastStatusQueryAt >= STATUS_POLL_INTERVAL_MS) {
+                writeCommand(output, "STATUS")
+                lastStatusQueryAt = now
+            }
+            if (lastReceiveAt == 0L && now - connectedAt >= FIRST_RESPONSE_TIMEOUT_MS) {
+                error("ESP32 did not answer STATUS over Wi-Fi")
+            }
             try {
                 val count = input.read(buffer)
                 if (count < 0) error("ESP32 closed the Wi-Fi link")
-                if (count > 0) listener.onSerialData(buffer.copyOf(count))
+                if (count > 0) {
+                    lastReceiveAt = SystemClock.elapsedRealtime()
+                    Log.d(TAG, "RX bytes: $count")
+                    listener.onSerialData(buffer.copyOf(count))
+                }
             } catch (_: SocketTimeoutException) {
                 // Short timeout lets queued commands be written without a second writer thread.
             }
         }
+    }
+
+    private fun writeCommand(output: BufferedOutputStream, command: String) {
+        output.write("$command\n".toByteArray(StandardCharsets.US_ASCII))
+        output.flush()
+        Log.i(TAG, "TX: $command")
     }
 
     private fun closeSockets() {
@@ -167,6 +194,8 @@ class WifiServoTransport(
         private const val DISCOVERY_TIMEOUT_MS = 1_000
         private const val CONNECT_TIMEOUT_MS = 2_000
         private const val READ_TIMEOUT_MS = 200
+        private const val FIRST_RESPONSE_TIMEOUT_MS = 4_000L
+        private const val STATUS_POLL_INTERVAL_MS = 5_000L
         private val BEACON = Regex("^PHONEPILOT_ESP32(?:\\s+port=(\\d{1,5}))?(?:\\s+.*)?$")
 
         internal fun parseDiscoveryPort(message: String): Int? {

@@ -7,6 +7,7 @@ sealed interface ServoResponse {
     data class AngleAccepted(val angle: Int) : ServoResponse
     data class Error(val code: String, val detail: String) : ServoResponse
     data object WifiSaved : ServoResponse
+    data class ConfigSaved(val mode: String) : ServoResponse
     data object WifiConnecting : ServoResponse
     data class WifiConnected(val ip: String) : ServoResponse
     data class WifiStatus(val state: String, val ip: String) : ServoResponse
@@ -47,6 +48,9 @@ class ServoLineParser(private val maxLineLength: Int = 512) {
         fun parseLine(raw: String): ServoResponse {
             val line = raw.trim()
             if (line.equals("OK WIFI_SAVED", ignoreCase = true)) return ServoResponse.WifiSaved
+            if (line.startsWith("OK CONFIG_SAVED mode=", ignoreCase = true)) {
+                return ServoResponse.ConfigSaved(line.substringAfter("mode=").trim())
+            }
             if (line.equals("WIFI CONNECTING", ignoreCase = true)) return ServoResponse.WifiConnecting
             if (line.startsWith("WIFI CONNECTED ", ignoreCase = true)) {
                 return ServoResponse.WifiConnected(line.substringAfter("ip=", "").trim())

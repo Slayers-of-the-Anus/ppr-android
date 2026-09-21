@@ -55,9 +55,9 @@ class ServoController(
                 activeTarget = null
                 latestTarget = null
                 cancelTimeoutLocked()
-                parsers[value]?.reset()
+                parsers[channel(value)]?.reset()
             }
-            isConnected = connected[value] == true
+            isConnected = connected[channel(value)] == true
         }
         emitStatus("esp32Link:${value.displayName()}")
         emitStatus("esp32:${if (isConnected) "connected · syncing" else "disconnected"}")
@@ -85,13 +85,17 @@ class ServoController(
     }
 
     fun configureWifi(ssid: String, password: String): Boolean {
+        return configureMode("HOTSPOT", ssid, password)
+    }
+
+    fun configureMode(mode: String, ssid: String, password: String): Boolean {
         if (!synchronized(lock) { connected[ServoTransportMode.USB] == true }) {
             emitStatus("esp32Wifi:connect ESP32 by USB first")
             emitError(ServoErrorCode.USB_DISCONNECTED, "Connect ESP32 over USB before sending hotspot credentials")
             return false
         }
-        usbTransport.configureWifi(ssid, password)
-        emitStatus("esp32Wifi:sending credentials over USB")
+        usbTransport.configureMode(mode, ssid, password)
+        emitStatus("esp32Wifi:sending $mode configuration over USB")
         return true
     }
 
@@ -136,6 +140,7 @@ class ServoController(
         for (response in parser.feed(data)) {
             when (response) {
                 ServoResponse.WifiSaved -> emitStatus("esp32Wifi:credentials saved; ESP32 is connecting")
+                is ServoResponse.ConfigSaved -> emitStatus("esp32Wifi:${response.mode} configuration saved")
                 ServoResponse.WifiConnecting -> emitStatus("esp32Wifi:connecting")
                 is ServoResponse.WifiConnected -> emitStatus("esp32Wifi:connected ${response.ip}")
                 is ServoResponse.WifiStatus -> emitStatus(
@@ -206,7 +211,7 @@ class ServoController(
 
     private fun handleEsp32Error(error: ServoResponse.Error) {
         if (error.code.startsWith("WIFI_") ||
-            (error.code == "UNKNOWN_COMMAND" && error.detail.startsWith("WIFI_CONFIG"))
+            (error.code == "UNKNOWN_COMMAND" && (error.detail.startsWith("WIFI_CONFIG") || error.detail.startsWith("CONFIG")))
         ) {
             emitStatus("esp32Wifi:error ${error.code}${if (error.detail.isNotBlank()) " ${error.detail}" else ""}")
             return
@@ -243,7 +248,10 @@ class ServoController(
     private fun transport(value: ServoTransportMode): ServoTransport =
         if (value == ServoTransportMode.USB) usbTransport else wifiTransport
 
-    private fun isActive(source: ServoTransportMode): Boolean = synchronized(lock) { mode == source }
+    private fun channel(value: ServoTransportMode): ServoTransportMode =
+        if (value == ServoTransportMode.SHARED) ServoTransportMode.WIFI else value
+
+    private fun isActive(source: ServoTransportMode): Boolean = synchronized(lock) { channel(mode) == source }
     private fun cancelTimeoutLocked() { timeoutGeneration++ }
 
     private fun markUnavailable() {
@@ -258,7 +266,11 @@ class ServoController(
         emitState(false, snapshot[0], snapshot[1], snapshot[2])
     }
 
-    private fun ServoTransportMode.displayName() = if (this == ServoTransportMode.USB) "USB cable" else "Wi-Fi hotspot"
+    private fun ServoTransportMode.displayName() = when (this) {
+        ServoTransportMode.USB -> "USB cable"
+        ServoTransportMode.WIFI -> "Phone hotspot"
+        ServoTransportMode.SHARED -> "Shared Wi-Fi"
+    }
     private fun ServoTransportMode.statusKey() = if (this == ServoTransportMode.USB) "esp32Usb" else "esp32Network"
     private fun emitStatus(value: String) = main.post { onStatus(value) }
     private fun emitState(value: Boolean, angle: Int, min: Int, max: Int) = main.post { onState(value, angle, min, max) }
