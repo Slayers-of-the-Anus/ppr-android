@@ -23,7 +23,9 @@ class EspSetupProvisioner(context: Context) {
     private val io = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "EspSetupProvisioning").apply { isDaemon = true }
     }
-    private var callback: ConnectivityManager.NetworkCallback? = null
+    @Volatile private var callback: ConnectivityManager.NetworkCallback? = null
+    @Volatile private var activeSocket: Socket? = null
+    @Volatile private var closed = false
 
     fun send(
         setupSsid: String,
@@ -33,6 +35,7 @@ class EspSetupProvisioner(context: Context) {
         targetPassword: String,
         onResult: (Boolean, String) -> Unit,
     ) {
+        if (closed) return
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
             onResult(false, "Automatic ESP32 setup requires Android 10 or newer")
             return
@@ -50,27 +53,39 @@ class EspSetupProvisioner(context: Context) {
             .build()
         val networkCallback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
-                io.execute {
-                    val result = runCatching { sendOnNetwork(network, mode, targetSsid, targetPassword) }
-                        .fold({ true to it }, { false to (it.message ?: "ESP32 setup failed") })
-                    if (done.compareAndSet(false, true)) {
-                        main.post {
-                            cancel()
-                            onResult(result.first, result.second)
+                if (closed) return
+                runCatching {
+                    io.execute {
+                        if (closed) return@execute
+                        val result = runCatching { sendOnNetwork(network, mode, targetSsid, targetPassword) }
+                            .fold({ true to it }, { false to (it.message ?: "ESP32 setup failed") })
+                        if (!closed && done.compareAndSet(false, true)) {
+                            main.post {
+                                if (!closed) {
+                                    cancel()
+                                    onResult(result.first, result.second)
+                                }
+                            }
                         }
+                    }
+                }.onFailure { error ->
+                    if (!closed && done.compareAndSet(false, true)) main.post {
+                        if (!closed) onResult(false, error.message ?: "ESP32 setup stopped")
                     }
                 }
             }
 
             override fun onUnavailable() {
-                if (done.compareAndSet(false, true)) main.post {
+                if (!closed && done.compareAndSet(false, true)) main.post {
+                    if (closed) return@post
                     cancel()
                     onResult(false, "Android could not join ESP32 setup Wi-Fi")
                 }
             }
 
             override fun onLost(network: Network) {
-                if (done.compareAndSet(false, true)) main.post {
+                if (!closed && done.compareAndSet(false, true)) main.post {
+                    if (closed) return@post
                     cancel()
                     onResult(false, "ESP32 setup Wi-Fi disconnected before confirmation")
                 }
@@ -92,23 +107,38 @@ class EspSetupProvisioner(context: Context) {
             "CONFIG $mode $encodedSsid $encodedPassword"
         }
         val socket = network.socketFactory.createSocket() as Socket
-        socket.use {
-            it.connect(InetSocketAddress("192.168.4.1", 3333), 5_000)
-            it.soTimeout = 5_000
-            it.getOutputStream().write("$command\n".toByteArray(StandardCharsets.US_ASCII))
-            it.getOutputStream().flush()
-            val reader = it.getInputStream().bufferedReader(StandardCharsets.US_ASCII)
-            repeat(8) {
-                val line = reader.readLine() ?: error("ESP32 closed the setup connection")
-                if (line.startsWith("OK CONFIG_SAVED mode=")) return "Saved ${line.substringAfter("mode=")} mode on ESP32"
-                if (line.startsWith("ERR ")) error(line)
+        activeSocket = socket
+        try {
+            socket.use {
+                it.connect(InetSocketAddress("192.168.4.1", 3333), 5_000)
+                it.soTimeout = 5_000
+                it.getOutputStream().write("$command\n".toByteArray(StandardCharsets.US_ASCII))
+                it.getOutputStream().flush()
+                val reader = it.getInputStream().bufferedReader(StandardCharsets.US_ASCII)
+                repeat(8) {
+                    val line = reader.readLine() ?: error("ESP32 closed the setup connection")
+                    if (line.startsWith("OK CONFIG_SAVED mode=")) return "Saved ${line.substringAfter("mode=")} mode on ESP32"
+                    if (line.startsWith("ERR ")) error(line)
+                }
+                error("ESP32 did not confirm configuration")
             }
-            error("ESP32 did not confirm configuration")
+        } finally {
+            if (activeSocket === socket) activeSocket = null
         }
     }
 
     fun cancel() {
         callback?.let { runCatching { connectivity.unregisterNetworkCallback(it) } }
         callback = null
+    }
+
+    fun shutdown() {
+        if (closed) return
+        closed = true
+        cancel()
+        runCatching { activeSocket?.close() }
+        activeSocket = null
+        io.shutdownNow()
+        main.removeCallbacksAndMessages(null)
     }
 }

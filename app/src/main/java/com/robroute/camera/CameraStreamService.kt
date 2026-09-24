@@ -39,6 +39,7 @@ class CameraStreamService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var foregroundStarted = false
     private var connectionRequested = false
+    private var resourcesReleased = false
 
     override fun onCreate() {
         super.onCreate()
@@ -125,6 +126,15 @@ class CameraStreamService : Service() {
         socket.disconnect()
         releaseWakeLock()
         stopForegroundCompat()
+        stopSelf()
+    }
+
+    fun shutdownAndStop() {
+        // An explicit exit must not reconnect when the app is opened again.
+        getSharedPreferences("robroute", MODE_PRIVATE).edit().putBoolean("autoConnect", false).commit()
+        connectionRequested = false
+        stopForegroundCompat()
+        releaseResources()
         stopSelf()
     }
 
@@ -228,13 +238,20 @@ class CameraStreamService : Service() {
         wakeLock = null
     }
 
-    override fun onDestroy() {
+    private fun releaseResources() {
+        if (resourcesReleased) return
+        resourcesReleased = true
         listener = null
         releaseWakeLock()
-        try { socket.disconnect() } catch (_: Throwable) { }
+        try { socket.shutdown() } catch (_: Throwable) { }
         try { servoController.stop() } catch (_: Throwable) { }
         try { hotspotController.stop() } catch (_: Throwable) { }
         try { webRtc.release() } catch (_: Throwable) { }
+    }
+
+    override fun onDestroy() {
+        stopForegroundCompat()
+        releaseResources()
         super.onDestroy()
     }
 

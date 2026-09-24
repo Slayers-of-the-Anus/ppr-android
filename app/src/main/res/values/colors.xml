@@ -13,6 +13,7 @@
     <color name="text_muted">#75869D</color>
     <color name="success">#4ADE80</color>
     <color name="warning">#FBBF24</color>
+    <color name="danger">#FB7185</color>
     <color name="button_secondary">#1B2B41</color>
     <color name="button_secondary_pressed">#263A55</color>
 </resources>

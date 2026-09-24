@@ -53,6 +53,10 @@ The hotspot reservation lives in `CameraStreamService`, not the Activity. It rem
 
 The service reconnects signaling automatically and keeps the camera/WebRTC lifecycle outside the Activity.
 
+## Exit app
+
+**EXIT APP** is available in both Robot and Setup screens. After confirmation it disables automatic reconnection, closes the server socket and ESP32 links, releases the camera/WebRTC resources and wake lock, stops the PhonePilot local hotspot and foreground service, clears the app's internal/external temporary cache, and closes the Activity. Saved server, robot, and transport settings are preserved. Android-managed system caches and the app's saved data are not deleted.
+
 ## Selectable ESP32 control link
 
 `CameraStreamService` owns `ServoController`, which owns both `UsbSerialServoTransport` and `WifiServoTransport`. Select **USB CABLE** to keep direct OTG control, or **WI-FI HOTSPOT** to control the provisioned ESP32 without the cable. ESP32 advertises itself over UDP port 3334; Android then uses a direct TCP line-protocol connection on port 3333. Neither `RobotSocketClient` nor `WebRtcController` contains transport-specific code.

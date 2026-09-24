@@ -20,6 +20,7 @@ import android.view.WindowManager
 import android.view.inputmethod.InputMethodManager
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.robroute.camera.databinding.ActivityMainBinding
@@ -34,7 +35,11 @@ class MainActivity : AppCompatActivity(), CameraStreamService.UiListener {
     private lateinit var binding: ActivityMainBinding
     private var service: CameraStreamService? = null
     private var bound = false
+    private var bindingRequested = false
+    private var exitRequested = false
     private var robotModeEnabled = true
+    private var serverSectionExpanded = false
+    private var setupConsoleExpanded = false
     private val eventLines = mutableListOf<String>()
     private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
     private val status = linkedMapOf(
@@ -121,6 +126,12 @@ class MainActivity : AppCompatActivity(), CameraStreamService.UiListener {
 
         binding.robotSettingsButton.setOnClickListener { switchMode(robotMode = false) }
         binding.setupRobotModeButton.setOnClickListener { switchMode(robotMode = true) }
+        binding.robotExitButton.setOnClickListener { confirmExit() }
+        binding.setupExitButton.setOnClickListener { confirmExit() }
+        serverSectionExpanded = savedInstanceState?.getBoolean(STATE_SERVER_SECTION_EXPANDED) ?: false
+        setupConsoleExpanded = savedInstanceState?.getBoolean(STATE_SETUP_CONSOLE_EXPANDED) ?: false
+        binding.serverSectionHeader.setOnClickListener { setServerSectionExpanded(!serverSectionExpanded) }
+        binding.setupConsoleToggle.setOnClickListener { setSetupConsoleExpanded(!setupConsoleExpanded) }
 
         binding.connectButton.setOnClickListener {
             val serverUrl = binding.serverUrl.text.toString().trim()
@@ -206,12 +217,43 @@ class MainActivity : AppCompatActivity(), CameraStreamService.UiListener {
     private fun applyUiMode() {
         binding.robotMode.visibility = if (robotModeEnabled) View.VISIBLE else View.GONE
         binding.setupMode.visibility = if (robotModeEnabled) View.GONE else View.VISIBLE
+        binding.setupConsolePanel.visibility = if (robotModeEnabled) View.GONE else View.VISIBLE
+        binding.serverDetails.visibility = if (serverSectionExpanded) View.VISIBLE else View.GONE
+        binding.serverSectionChevron.text = if (serverSectionExpanded) "⌃" else "⌄"
+        binding.root.post { updateSetupConsoleSize() }
         if (robotModeEnabled) {
             currentFocus?.clearFocus()
             (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager)
                 .hideSoftInputFromWindow(binding.root.windowToken, 0)
         }
         binding.robotIdentity.text = "${binding.robotId.text}  ·  ${binding.robotName.text}"
+    }
+
+    private fun setServerSectionExpanded(expanded: Boolean) {
+        serverSectionExpanded = expanded
+        binding.serverDetails.visibility = if (expanded) View.VISIBLE else View.GONE
+        binding.serverSectionChevron.text = if (expanded) "⌃" else "⌄"
+    }
+
+    private fun setSetupConsoleExpanded(expanded: Boolean) {
+        setupConsoleExpanded = expanded
+        binding.setupConsoleContent.visibility = if (expanded) View.VISIBLE else View.GONE
+        binding.setupConsoleChevron.text = if (expanded) "⌄" else "⌃"
+        updateSetupConsoleSize()
+    }
+
+    private fun updateSetupConsoleSize() {
+        if (!::binding.isInitialized) return
+        val params = binding.setupConsolePanel.layoutParams
+        val collapsedHeight = (48 * resources.displayMetrics.density).toInt()
+        params.height = if (setupConsoleExpanded) {
+            (binding.root.height.takeIf { it > 0 } ?: resources.displayMetrics.heightPixels) / 2
+        } else collapsedHeight
+        binding.setupConsolePanel.layoutParams = params
+
+        val setupParams = binding.setupMode.layoutParams as android.widget.FrameLayout.LayoutParams
+        setupParams.bottomMargin = if (robotModeEnabled) 0 else params.height
+        binding.setupMode.layoutParams = setupParams
     }
 
     private fun enforceOrientation(robotMode: Boolean) {
@@ -231,9 +273,50 @@ class MainActivity : AppCompatActivity(), CameraStreamService.UiListener {
     }
 
     private fun bindCameraService() {
-        if (bound) return
+        if (bindingRequested || exitRequested) return
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) return
-        bindService(Intent(this, CameraStreamService::class.java), connection, Context.BIND_AUTO_CREATE)
+        bindingRequested = bindService(Intent(this, CameraStreamService::class.java), connection, Context.BIND_AUTO_CREATE)
+    }
+
+    private fun confirmExit() {
+        AlertDialog.Builder(this)
+            .setTitle("Exit PhonePilot?")
+            .setMessage("Camera, streaming, ESP32 links and the PhonePilot hotspot will stop. Temporary cache will be cleared; saved settings will remain.")
+            .setNegativeButton("CANCEL", null)
+            .setPositiveButton("EXIT APP") { _, _ -> exitApplication() }
+            .show()
+    }
+
+    private fun exitApplication() {
+        if (exitRequested) return
+        exitRequested = true
+        pendingConnect = null
+        pendingHotspotStart = false
+        setupProvisioner.shutdown()
+        service?.setUiListener(null)
+        service?.shutdownAndStop()
+        unbindCameraService()
+        stopService(Intent(this, CameraStreamService::class.java))
+        clearTemporaryCache()
+        finishAffinity()
+    }
+
+    private fun unbindCameraService() {
+        service?.detachPreview(binding.preview)
+        service?.setUiListener(null)
+        if (bindingRequested) {
+            try { unbindService(connection) } catch (_: IllegalArgumentException) { }
+            bindingRequested = false
+        }
+        bound = false
+        service = null
+    }
+
+    private fun clearTemporaryCache() {
+        // Only this app's cache directories; never remove preferences or saved Wi-Fi details.
+        listOfNotNull(cacheDir, externalCacheDir).forEach { directory ->
+            directory.listFiles()?.forEach { entry -> runCatching { entry.deleteRecursively() } }
+        }
     }
 
     override fun onStatus(status: Map<String, String>) {
@@ -428,6 +511,32 @@ class MainActivity : AppCompatActivity(), CameraStreamService.UiListener {
         binding.robotHealth.text = if (coreHealthy) "●  SYSTEM READY" else "●  ATTENTION"
         binding.robotHealth.setTextColor(ContextCompat.getColor(this, if (coreHealthy) R.color.success else R.color.warning))
         binding.eventLog.text = eventLines.joinToString("\n")
+        binding.setupConsoleLog.text = eventLines.joinToString("\n")
+        binding.setupConsoleCount.text = "${eventLines.size} EVENTS"
+        renderServerIndicator(server)
+    }
+
+    private fun renderServerIndicator(server: String) {
+        val normalized = server.lowercase(Locale.ROOT)
+        val connecting = normalized.contains("connecting") || normalized.contains("reconnecting") || normalized.contains("starting service")
+        val connected = !connecting && (normalized == "connected" || normalized.startsWith("connected "))
+        val stateLabel = when {
+            connected -> "CONNECTED"
+            connecting -> "CONNECTING"
+            else -> "DISCONNECTED"
+        }
+        val color = when {
+            connected -> R.color.success
+            connecting -> R.color.warning
+            else -> R.color.danger
+        }
+        binding.serverConnectionIndicator.setBackgroundResource(when {
+            connected -> R.drawable.bg_server_indicator_connected
+            connecting -> R.drawable.bg_server_indicator_connecting
+            else -> R.drawable.bg_server_indicator_disconnected
+        })
+        binding.serverConnectionLabel.text = "SERVER  ·  $stateLabel"
+        binding.serverConnectionLabel.setTextColor(ContextCompat.getColor(this, color))
     }
 
     private fun setTelemetry(view: TextView, label: String, value: String, healthy: Boolean) {
@@ -451,7 +560,12 @@ class MainActivity : AppCompatActivity(), CameraStreamService.UiListener {
         val line = "${timeFormat.format(Date())}  $message"
         eventLines.add(line)
         while (eventLines.size > MAX_EVENT_LINES) eventLines.removeAt(0)
-        if (::binding.isInitialized) binding.eventLog.text = eventLines.joinToString("\n")
+        if (::binding.isInitialized) {
+            val log = eventLines.joinToString("\n")
+            binding.eventLog.text = log
+            binding.setupConsoleLog.text = log
+            binding.setupConsoleCount.text = "${eventLines.size} EVENTS"
+        }
     }
 
     private fun statusLabel(key: String): String = when (key) {
@@ -470,22 +584,18 @@ class MainActivity : AppCompatActivity(), CameraStreamService.UiListener {
 
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putStringArrayList(STATE_EVENT_LOG, ArrayList(eventLines))
+        outState.putBoolean(STATE_SERVER_SECTION_EXPANDED, serverSectionExpanded)
+        outState.putBoolean(STATE_SETUP_CONSOLE_EXPANDED, setupConsoleExpanded)
         super.onSaveInstanceState(outState)
     }
 
     override fun onStop() {
-        service?.detachPreview(binding.preview)
-        service?.setUiListener(null)
-        if (bound) {
-            try { unbindService(connection) } catch (_: Exception) { }
-            bound = false
-            service = null
-        }
+        unbindCameraService()
         super.onStop()
     }
 
     override fun onDestroy() {
-        setupProvisioner.cancel()
+        setupProvisioner.shutdown()
         super.onDestroy()
     }
 
@@ -497,6 +607,8 @@ class MainActivity : AppCompatActivity(), CameraStreamService.UiListener {
     companion object {
         private const val PREF_ROBOT_MODE = "robotMode"
         private const val STATE_EVENT_LOG = "eventLog"
+        private const val STATE_SERVER_SECTION_EXPANDED = "serverSectionExpanded"
+        private const val STATE_SETUP_CONSOLE_EXPANDED = "setupConsoleExpanded"
         private const val MAX_EVENT_LINES = 18
         private val CAMERA_FORMAT = Regex("\\d+x\\d+@\\d+")
     }

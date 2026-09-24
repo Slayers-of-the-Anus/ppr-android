@@ -6,6 +6,7 @@ import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.net.SocketException
 import java.net.SocketTimeoutException
 import java.nio.charset.StandardCharsets
 import android.os.SystemClock
@@ -111,6 +112,16 @@ class WifiServoTransport(
                     return InetSocketAddress(packet.address, port)
                 } catch (_: SocketTimeoutException) {
                     // Keep listening while the hotspot or ESP32 is starting.
+                } catch (error: SocketException) {
+                    // stop() closes the receiver to wake this blocking read; that is not a crash.
+                    if (started) {
+                        Log.w(TAG, "ESP32 discovery socket closed unexpectedly", error)
+                        listener.onTransportError(
+                            ServoErrorCode.WIFI_CONNECT_FAILED,
+                            error.message ?: "ESP32 discovery stopped",
+                        )
+                    }
+                    return null
                 }
             }
             null

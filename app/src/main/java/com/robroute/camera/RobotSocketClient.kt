@@ -60,6 +60,13 @@ class RobotSocketClient(
 
     fun disconnect() = disconnectInternal(intentional = true, clearSettings = false)
 
+    fun shutdown() {
+        disconnectInternal(intentional = true, clearSettings = true)
+        client.dispatcher.executorService.shutdown()
+        client.connectionPool.evictAll()
+        client.cache?.close()
+    }
+
     private fun disconnectInternal(intentional: Boolean, clearSettings: Boolean) {
         reconnect = false
         generation.incrementAndGet()
