@@ -27,6 +27,8 @@ import com.robroute.camera.databinding.ActivityMainBinding
 import com.robroute.camera.hotspot.HotspotSnapshot
 import com.robroute.camera.hotspot.EspSetupProvisioner
 import com.robroute.camera.servo.ServoTransportMode
+import com.robroute.camera.network.SecureSettings
+import android.util.Base64
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -54,12 +56,20 @@ class MainActivity : AppCompatActivity(), CameraStreamService.UiListener {
     private var pendingHotspotStart = false
     private var hotspotSnapshot = HotspotSnapshot()
     private lateinit var setupProvisioner: EspSetupProvisioner
+    private lateinit var secureSettings: SecureSettings
+    private var blePermissionAsked = false
+
+    private val blePermissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
+        if (grants.values.all { it }) service?.retryBle()
+        else updateLocalStatus("ble", "off · Bluetooth permissions needed")
+    }
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
             service = (binder as? CameraStreamService.LocalBinder)?.service()
             bound = service != null
             service?.setUiListener(this@MainActivity)
+            service?.retryBle()
             service?.startPreviewCamera()
             service?.attachPreview(binding.preview)
             if (pendingHotspotStart) {
@@ -109,10 +119,12 @@ class MainActivity : AppCompatActivity(), CameraStreamService.UiListener {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
         setupProvisioner = EspSetupProvisioner(this)
+        secureSettings = SecureSettings(this)
         savedInstanceState?.getStringArrayList(STATE_EVENT_LOG)?.let(eventLines::addAll)
         if (eventLines.isEmpty()) appendEvent("PhonePilot interface ready")
 
         binding.serverUrl.setText(prefs.getString("server", "http://192.168.0.128:8080"))
+        binding.publicServerUrl.setText(prefs.getString("publicServer", ""))
         binding.robotId.setText(prefs.getString("robotId", "phone_01"))
         binding.robotName.setText(prefs.getString("robotName", "Courier Android"))
         val savedTransport = prefs.getString("servoTransport", ServoTransportMode.USB.name)
@@ -137,11 +149,28 @@ class MainActivity : AppCompatActivity(), CameraStreamService.UiListener {
             val serverUrl = binding.serverUrl.text.toString().trim()
             val id = binding.robotId.text.toString().trim()
             val cameraName = binding.robotName.text.toString().trim()
-            if (serverUrl.isBlank() || id.length < 2) {
+            val publicUrl = binding.publicServerUrl.text.toString().trim()
+            val enteredSecret = binding.cameraSecret.text.toString().trim()
+            if ((serverUrl.isBlank() && publicUrl.isBlank()) || id.length < 2 ||
+                (publicUrl.isNotBlank() && !publicUrl.startsWith("https://"))) {
                 updateLocalStatus("server", "check settings")
                 return@setOnClickListener
             }
-            prefs.edit().putString("server", serverUrl).putString("robotId", id).putString("robotName", cameraName).apply()
+            if (enteredSecret.isNotBlank()) {
+                val bytes = runCatching { Base64.decode(enteredSecret, Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP) }.getOrNull()
+                if (bytes?.size != 32) { updateLocalStatus("server", "secret must contain 32 bytes"); return@setOnClickListener }
+                secureSettings.put("camera_secret", enteredSecret)
+                binding.cameraSecret.text?.clear()
+            }
+            if (publicUrl.isNotBlank() && secureSettings.get("camera_secret") == null) {
+                updateLocalStatus("server", "public server needs camera secret")
+                return@setOnClickListener
+            }
+            if (prefs.getString("publicServer", "") != publicUrl || prefs.getString("server", "") != serverUrl) {
+                prefs.edit().remove("serverId").apply()
+            }
+            prefs.edit().putString("server", serverUrl).putString("publicServer", publicUrl)
+                .putString("robotId", id).putString("robotName", cameraName).apply()
             binding.robotIdentity.text = "$id  ·  $cameraName"
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
                 pendingConnect = Triple(serverUrl, id, cameraName)
@@ -195,11 +224,19 @@ class MainActivity : AppCompatActivity(), CameraStreamService.UiListener {
             } else networkNamePermission.launch(Manifest.permission.ACCESS_FINE_LOCATION)
         }
         binding.sendBoardConfigurationButton.setOnClickListener { sendBoardConfiguration() }
+        binding.deleteWifiProfileButton.setOnClickListener {
+            val ssid = binding.sharedWifiSsid.text.toString().trim()
+            secureSettings.remove("wifi:$ssid")
+            binding.sharedWifiPassword.text?.clear()
+            binding.rememberWifiPassword.isChecked = false
+            showConfigurationResult("Saved Wi-Fi profile deleted from this phone.")
+        }
 
         applyUiMode()
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) bindCameraService()
         else cameraPermission.launch(Manifest.permission.CAMERA)
         renderStatus()
+        requestBlePermissionsIfNeeded()
     }
 
     private fun switchMode(robotMode: Boolean) {
@@ -426,12 +463,23 @@ class MainActivity : AppCompatActivity(), CameraStreamService.UiListener {
             else -> ""
         }
         val password = when (mode) {
-            "SHARED" -> binding.sharedWifiPassword.text.toString()
+            "SHARED" -> binding.sharedWifiPassword.text.toString().ifBlank { secureSettings.get("wifi:$ssid").orEmpty() }
             "HOTSPOT" -> hotspotSnapshot.password
             else -> ""
         }
-        if (mode != "USB" && (ssid.toByteArray(Charsets.UTF_8).size !in 1..32 || password.length !in 8..63)) {
+        val bleSelected = binding.provisionBle.isChecked
+        if (mode != "USB" && (ssid.toByteArray(Charsets.UTF_8).size !in 1..32 ||
+                (password.isNotBlank() && password.toByteArray(Charsets.UTF_8).size !in 8..63) ||
+                (!bleSelected && password.isBlank()) || (mode == "HOTSPOT" && password.isBlank()))) {
             showConfigurationResult("Enter a valid network name and password (8–63 characters), or start the phone hotspot.")
+            return
+        }
+        if (bleSelected) {
+            val sent = service?.configureBoardOverBle(mode, ssid, password) == true
+            if (sent && mode == "SHARED" && binding.rememberWifiPassword.isChecked && password.isNotBlank()) {
+                secureSettings.put("wifi:$ssid", password)
+            }
+            showConfigurationResult(if (sent) "BLE command sent; wait for ESP32 ready status." else "BLE is not connected or another operation is active. Pair the board and retry.")
             return
         }
         if (binding.provisionUsb.isChecked) {
@@ -489,6 +537,7 @@ class MainActivity : AppCompatActivity(), CameraStreamService.UiListener {
 
         binding.status.text = buildString {
             appendLine("Server      ${server}")
+            appendLine("Path        ${status["networkPath"] ?: "offline"}")
             appendLine("Camera      ${camera}")
             appendLine("WebRTC      ${webRtc}")
             appendLine("ESP32       ${esp32}")
@@ -497,6 +546,8 @@ class MainActivity : AppCompatActivity(), CameraStreamService.UiListener {
             appendLine("USB         ${status["esp32Usb"] ?: "disconnected"}")
             appendLine("Wi-Fi link  ${status["esp32Network"] ?: "searching"}")
             appendLine("ESP32 Wi-Fi ${status["esp32Wifi"] ?: "not configured"}")
+            appendLine("BLE         ${status["ble"] ?: "off"}")
+            appendLine("BLE Wi-Fi   ${status["bleWifi"] ?: "unknown"}")
             append("Hotspot     $hotspot")
         }
         binding.viewers.text = viewersText
@@ -505,7 +556,8 @@ class MainActivity : AppCompatActivity(), CameraStreamService.UiListener {
         setTelemetry(binding.boardState, "CONTROL BOARD", "$esp32  ·  $controlLink", isHealthy(esp32))
         setTelemetry(binding.cameraState, "CAMERA / STREAM", "$camera  ·  $webRtc", isHealthy(camera))
         setTelemetry(binding.viewerState, "VIEWERS", "$viewerCount / $viewerLimit", viewerCount > 0)
-        binding.robotDetails.text = "Control  $controlLink     •     USB  ${status["esp32Usb"] ?: "disconnected"}     •     Wi-Fi  ${status["esp32Network"] ?: "searching"}     •     Hotspot  $hotspot"
+        binding.robotDetails.text = "Server path  ${status["networkPath"] ?: "offline"}     •     BLE  ${status["ble"] ?: "off"}\n" +
+            "ESP Wi-Fi  ${status["bleWifi"] ?: "unknown"}     •     Control  $controlLink     •     USB  ${status["esp32Usb"] ?: "disconnected"}     •     Wi-Fi  ${status["esp32Network"] ?: "searching"}     •     Hotspot  $hotspot"
 
         val coreHealthy = isHealthy(server) && isHealthy(camera) && isHealthy(esp32)
         binding.robotHealth.text = if (coreHealthy) "●  SYSTEM READY" else "●  ATTENTION"
@@ -579,6 +631,9 @@ class MainActivity : AppCompatActivity(), CameraStreamService.UiListener {
         "esp32Network" -> "Wi-Fi link"
         "esp32Wifi" -> "ESP32 Wi-Fi"
         "hotspot" -> "Hotspot"
+        "ble" -> "BLE"
+        "bleWifi" -> "ESP Wi-Fi via BLE"
+        "networkPath" -> "Network path"
         else -> key
     }
 
@@ -602,6 +657,19 @@ class MainActivity : AppCompatActivity(), CameraStreamService.UiListener {
     override fun onStart() {
         super.onStart()
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) bindCameraService()
+        requestBlePermissionsIfNeeded()
+    }
+
+    private fun requestBlePermissionsIfNeeded() {
+        if (blePermissionAsked) return
+        val required = if (Build.VERSION.SDK_INT >= 31) {
+            arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
+        } else arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+        val missing = required.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
+        if (missing.isNotEmpty()) {
+            blePermissionAsked = true
+            blePermissions.launch(missing.toTypedArray())
+        } else service?.retryBle()
     }
 
     companion object {

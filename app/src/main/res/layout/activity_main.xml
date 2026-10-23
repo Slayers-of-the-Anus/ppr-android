@@ -372,9 +372,28 @@
                         android:id="@+id/serverUrl"
                         style="@style/Widget.PhonePilot.Input"
                         android:layout_marginTop="10dp"
-                        android:hint="Server URL"
+                        android:hint="LAN server URL (fallback)"
                         android:importantForAutofill="no"
                         android:inputType="textUri"
+                        android:singleLine="true" />
+
+                    <EditText
+                        android:id="@+id/publicServerUrl"
+                        style="@style/Widget.PhonePilot.Input"
+                        android:layout_marginTop="8dp"
+                        android:hint="Public HTTPS server URL"
+                        android:importantForAutofill="no"
+                        android:inputType="textUri"
+                        android:singleLine="true" />
+
+                    <EditText
+                        android:id="@+id/cameraSecret"
+                        style="@style/Widget.PhonePilot.Input"
+                        android:layout_marginTop="8dp"
+                        android:hint="32-byte camera secret (Base64URL)"
+                        android:importantForAutofill="no"
+                        android:inputType="textPassword"
+                        android:saveEnabled="false"
                         android:singleLine="true" />
 
                     <EditText
@@ -622,12 +641,20 @@
                     android:orientation="horizontal">
 
                     <RadioButton
-                        android:id="@+id/provisionUsb"
+                        android:id="@+id/provisionBle"
                         style="@style/Widget.PhonePilot.Radio"
                         android:layout_width="0dp"
                         android:layout_height="40dp"
                         android:layout_weight="1"
                         android:checked="true"
+                        android:text="VIA BLE" />
+
+                    <RadioButton
+                        android:id="@+id/provisionUsb"
+                        style="@style/Widget.PhonePilot.Radio"
+                        android:layout_width="0dp"
+                        android:layout_height="40dp"
+                        android:layout_weight="1"
                         android:text="VIA USB" />
 
                     <RadioButton
@@ -638,6 +665,20 @@
                         android:layout_weight="1"
                         android:text="VIA SETUP WI-FI" />
                 </RadioGroup>
+
+                <CheckBox
+                    android:id="@+id/rememberWifiPassword"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Remember shared Wi-Fi password securely"
+                    android:textColor="@color/text_secondary" />
+
+                <Button
+                    android:id="@+id/deleteWifiProfileButton"
+                    style="@style/Widget.PhonePilot.Button.Outline"
+                    android:layout_width="match_parent"
+                    android:layout_height="42dp"
+                    android:text="DELETE SAVED WI-FI PROFILE" />
 
                 <EditText
                     android:id="@+id/espSetupSsid"

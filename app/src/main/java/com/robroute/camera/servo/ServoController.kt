@@ -11,6 +11,7 @@ class ServoController(
     private val onStatus: (String) -> Unit,
     private val onState: (available: Boolean, angle: Int, min: Int, max: Int) -> Unit,
     private val onError: (code: String, detail: String) -> Unit,
+    private val onDriveState: (available: Boolean, direction: String) -> Unit = { _, _ -> },
 ) {
     private val usbListener = transportListener(ServoTransportMode.USB)
     private val wifiListener = transportListener(ServoTransportMode.WIFI)
@@ -28,6 +29,8 @@ class ServoController(
     )
     private var mode = initialMode
     private var available = false
+    private var driveAvailable = false
+    private var driveDirection = "stop"
     private var angle = 90
     private var minAngle = 0
     private var maxAngle = 180
@@ -42,6 +45,7 @@ class ServoController(
     }
 
     fun stop() {
+        stopDrive()
         usbTransport.stop()
         wifiTransport.stop()
     }
@@ -50,7 +54,10 @@ class ServoController(
         val isConnected: Boolean
         synchronized(lock) {
             if (mode != value) {
+                activeTransport().drive("stop", android.os.SystemClock.elapsedRealtime() + 400)
                 mode = value
+                driveAvailable = false
+                driveDirection = "stop"
                 available = false
                 activeTarget = null
                 latestTarget = null
@@ -63,6 +70,7 @@ class ServoController(
         emitStatus("esp32:${if (isConnected) "connected · syncing" else "disconnected"}")
         emitStatus("servo:—")
         emitState(false, angle, minAngle, maxAngle)
+        emitDriveState(false, "stop")
         if (isConnected) transport(value).requestStatus()
     }
 
@@ -79,9 +87,21 @@ class ServoController(
         }
     }
 
+    fun drive(action: String, expiresAt: Long) {
+        synchronized(lock) {
+            if (action !in setOf("forward", "backward", "stop")) return
+            if (action != "stop" && !driveAvailable) return
+            if (android.os.SystemClock.elapsedRealtime() > expiresAt) return
+            activeTransport().drive(action, expiresAt)
+        }
+    }
+
+    fun stopDrive() = drive("stop", android.os.SystemClock.elapsedRealtime() + 400)
+
     fun publishSnapshot() {
         val snapshot = synchronized(lock) { listOf(if (available) 1 else 0, angle, minAngle, maxAngle) }
         emitState(snapshot[0] == 1, snapshot[1], snapshot[2], snapshot[3])
+        synchronized(lock) { emitDriveState(driveAvailable, driveDirection) }
     }
 
     fun configureWifi(ssid: String, password: String): Boolean {
@@ -149,6 +169,13 @@ class ServoController(
                 is ServoResponse.Invalid -> Log.d(TAG, "ignored ${source.name} line: ${response.line}")
                 else -> if (isActive(source)) {
                     when (response) {
+                        is ServoResponse.DriveStatus -> {
+                            synchronized(lock) {
+                                driveAvailable = response.ready
+                                driveDirection = if (response.ready) response.direction else "stop"
+                                emitDriveState(driveAvailable, driveDirection)
+                            }
+                        }
                         is ServoResponse.Status -> handleStatus(response)
                         is ServoResponse.AngleAccepted -> handleAngleAccepted(response.angle)
                         is ServoResponse.Error -> handleEsp32Error(response)
@@ -256,6 +283,8 @@ class ServoController(
 
     private fun markUnavailable() {
         val snapshot = synchronized(lock) {
+            driveAvailable = false
+            driveDirection = "stop"
             available = false
             activeTarget = null
             latestTarget = null
@@ -264,6 +293,7 @@ class ServoController(
         }
         emitStatus("servo:—")
         emitState(false, snapshot[0], snapshot[1], snapshot[2])
+        emitDriveState(false, "stop")
     }
 
     private fun ServoTransportMode.displayName() = when (this) {
@@ -275,6 +305,7 @@ class ServoController(
     private fun emitStatus(value: String) = main.post { onStatus(value) }
     private fun emitState(value: Boolean, angle: Int, min: Int, max: Int) = main.post { onState(value, angle, min, max) }
     private fun emitError(code: String, detail: String) = main.post { onError(code, detail) }
+    private fun emitDriveState(available: Boolean, direction: String) = main.post { onDriveState(available, direction) }
 
     companion object {
         private const val TAG = "ServoController"

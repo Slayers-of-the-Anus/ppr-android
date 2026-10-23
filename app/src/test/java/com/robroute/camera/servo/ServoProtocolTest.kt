@@ -5,6 +5,16 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ServoProtocolTest {
+    @Test fun parsesDriveCapabilityAndStopAfterWatchdog() {
+        val parser = ServoLineParser()
+        assertEquals(listOf(
+            ServoResponse.Status(true, 90, 0, 180),
+            ServoResponse.DriveStatus(true, "forward"),
+            ServoResponse.DriveStatus(true, "stop"),
+        ), parser.feed("STATUS ready=1 angle=90 min=0 max=180\nDRIVE_STATE ready=1 direction=forward\nDRIVE_STATE ready=1 direction=stop\n".toByteArray()))
+        assertTrue(ServoLineParser.parseLine("DRIVE_STATE ready=1 direction=left") is ServoResponse.Invalid)
+        assertTrue(ServoLineParser.parseLine("DRIVE_STATE ready=5 direction=stop") is ServoResponse.Invalid)
+    }
     @Test fun parsesAngleAck() {
         assertEquals(ServoResponse.AngleAccepted(95), ServoLineParser.parseLine("OK ANGLE 95"))
     }

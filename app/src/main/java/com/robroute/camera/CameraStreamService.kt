@@ -12,6 +12,8 @@ import com.robroute.camera.servo.ServoController
 import com.robroute.camera.servo.ServoTransportMode
 import com.robroute.camera.hotspot.HotspotSnapshot
 import com.robroute.camera.hotspot.LocalHotspotController
+import com.robroute.camera.ble.PhonePilotBleCentral
+import com.robroute.camera.network.SecureSettings
 import org.webrtc.SurfaceViewRenderer
 import java.util.concurrent.ConcurrentHashMap
 
@@ -28,10 +30,14 @@ class CameraStreamService : Service() {
     private lateinit var socket: RobotSocketClient
     private lateinit var servoController: ServoController
     private lateinit var hotspotController: LocalHotspotController
+    private lateinit var ble: PhonePilotBleCentral
+    private var autoBleAttempted = false
+    private var sharedCorrectionAttempted = false
     private val status = ConcurrentHashMap<String, String>().apply {
         put("server", "disconnected"); put("camera", "starting"); put("webrtc", "idle")
         put("esp32", "disconnected"); put("servo", "—"); put("esp32Wifi", "not configured"); put("hotspot", "stopped")
         put("esp32Link", "USB cable"); put("esp32Usb", "disconnected"); put("esp32Network", "searching")
+        put("ble", "off"); put("bleWifi", "unknown"); put("networkPath", "offline")
     }
     @Volatile private var listener: UiListener? = null
     private var lastViewers: List<RobotSocketClient.ViewerInfo> = emptyList()
@@ -63,20 +69,77 @@ class CameraStreamService : Service() {
             onError = { code, detail ->
                 if (::socket.isInitialized) socket.publishServoError(code, detail)
             },
+            onDriveState = { available, direction ->
+                if (::socket.isInitialized) socket.publishDriveState(available, direction)
+            },
         )
         socket = RobotSocketClient(
-            webRtc, ::updateStatus, ::updateViewers,
+            applicationContext, webRtc, ::updateStatus, ::updateViewers,
             onServoCommand = { command -> servoController.moveTo(command.angle) },
-            onConnectionChanged = { connected -> if (connected) servoController.publishSnapshot() },
+            onConnectionChanged = { connected ->
+                servoController.stopDrive()
+                if (connected) servoController.publishSnapshot()
+            },
+            onDriveCommand = { action, expiresAt -> servoController.drive(action, expiresAt) },
         )
         hotspotController = LocalHotspotController(
             applicationContext,
             onState = { snapshot ->
                 updateStatus("hotspot:${snapshot.state.name.lowercase()}${if (snapshot.detail.isNotBlank()) " · ${snapshot.detail}" else ""}")
                 listener?.onHotspot(snapshot)
+                if (snapshot.state == HotspotSnapshot.State.RUNNING &&
+                    getSharedPreferences("robroute", MODE_PRIVATE).getString("boardDesiredMode", "USB") == "HOTSPOT") {
+                    ble.setConfig("HOTSPOT", snapshot.ssid, snapshot.password)
+                }
             },
         )
+        ble = PhonePilotBleCentral(applicationContext,
+            onState = { value ->
+                if (value == "disconnected" || value == "off") {
+                    autoBleAttempted = false
+                    sharedCorrectionAttempted = false
+                    updateStatus("bleWifi:unknown")
+                }
+                updateStatus("ble:$value")
+                if (value == "error · NEED_CREDENTIALS") {
+                    val ssid = getSharedPreferences("robroute", MODE_PRIVATE).getString("boardDesiredSsid", "").orEmpty()
+                    val password = SecureSettings(applicationContext).get("wifi:$ssid")
+                    if (ssid.isNotBlank() && password != null) ble.setConfig("SHARED", ssid, password)
+                    else updateStatus("ble:credentials needed for $ssid")
+                }
+            },
+            onBoardStatus = { board ->
+                updateStatus("bleWifi:${board.optString("wifiState")} · ${board.optString("phase")}")
+                val desired = getSharedPreferences("robroute", MODE_PRIVATE).getString("boardDesiredMode", "USB") ?: "USB"
+                if (!autoBleAttempted) {
+                    autoBleAttempted = true
+                    val current = board.optString("mode")
+                    val ready = board.optString("phase") == "ready"
+                    val desiredSsid = getSharedPreferences("robroute", MODE_PRIVATE).getString("boardDesiredSsid", "").orEmpty()
+                    when {
+                        desired == "USB" && (!ready || current != "USB") -> ble.selectMode("USB")
+                        desired == "SHARED" && (!ready || current != "SHARED") -> ble.selectMode("SHARED")
+                        desired == "HOTSPOT" && hotspotController.current().state == HotspotSnapshot.State.RUNNING -> {
+                            val snap = hotspotController.current()
+                            ble.setConfig("HOTSPOT", snap.ssid, snap.password)
+                        }
+                    }
+                }
+                if (desired == "SHARED" &&
+                    !getSharedPreferences("robroute", MODE_PRIVATE).getString("boardDesiredSsid", "").isNullOrBlank() &&
+                    board.optString("mode") == "SHARED" &&
+                    board.optString("phase") == "ready" &&
+                    board.optString("ssid") != getSharedPreferences("robroute", MODE_PRIVATE).getString("boardDesiredSsid", "") &&
+                    !sharedCorrectionAttempted) {
+                    sharedCorrectionAttempted = true
+                    val ssid = getSharedPreferences("robroute", MODE_PRIVATE).getString("boardDesiredSsid", "").orEmpty()
+                    val password = SecureSettings(applicationContext).get("wifi:$ssid")
+                    if (ssid.isNotBlank() && password != null) ble.setConfig("SHARED", ssid, password)
+                    else updateStatus("ble:credentials needed for $ssid")
+                }
+            })
         servoController.start()
+        ble.start()
     }
 
     override fun onBind(intent: Intent?): IBinder = binder
@@ -90,7 +153,7 @@ class CameraStreamService : Service() {
                 val server = prefs.getString("server", "")?.trim().orEmpty()
                 val id = prefs.getString("robotId", "phone_01")?.trim().orEmpty()
                 val name = prefs.getString("robotName", "Courier Android")?.trim().orEmpty()
-                if (server.isNotBlank() && id.length >= 2) {
+                if ((server.isNotBlank() || !prefs.getString("publicServer", "").isNullOrBlank()) && id.length >= 2) {
                     connectionRequested = true
                     acquireWakeLock()
                     socket.connect(server, id, name)
@@ -153,6 +216,23 @@ class CameraStreamService : Service() {
 
     fun sendBoardConfigurationOverUsb(mode: String, ssid: String, password: String): Boolean =
         servoController.configureMode(mode, ssid, password)
+
+    fun retryBle() = ble.start()
+
+    fun configureBoardOverBle(mode: String, ssid: String, password: String): Boolean {
+        getSharedPreferences("robroute", MODE_PRIVATE).edit().putString("boardDesiredMode", mode)
+            .putString("boardDesiredSsid", if (mode == "SHARED") ssid else "").apply()
+        val board = ble.currentStatus()
+        return when {
+            mode == "USB" -> ble.selectMode("USB")
+            mode == "SHARED" && board?.optString("mode") == "SHARED" &&
+                board.optString("ssid") == ssid && board.optString("phase") == "ready" -> true
+            mode == "SHARED" && password.isBlank() -> ble.selectMode("SHARED")
+            mode == "SHARED" -> ble.setConfig(mode, ssid, password)
+            mode == "HOTSPOT" -> ble.setConfig(mode, ssid, password)
+            else -> false
+        }
+    }
 
     fun setServoTransportMode(mode: ServoTransportMode) {
         getSharedPreferences("robroute", MODE_PRIVATE).edit().putString("servoTransport", mode.name).apply()
@@ -246,6 +326,7 @@ class CameraStreamService : Service() {
         try { socket.shutdown() } catch (_: Throwable) { }
         try { servoController.stop() } catch (_: Throwable) { }
         try { hotspotController.stop() } catch (_: Throwable) { }
+        try { ble.stop() } catch (_: Throwable) { }
         try { webRtc.release() } catch (_: Throwable) { }
     }
 

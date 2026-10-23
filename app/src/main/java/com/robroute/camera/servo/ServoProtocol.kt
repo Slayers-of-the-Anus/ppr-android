@@ -3,6 +3,7 @@ package com.robroute.camera.servo
 import java.nio.charset.StandardCharsets
 
 sealed interface ServoResponse {
+    data class DriveStatus(val ready: Boolean, val direction: String) : ServoResponse
     data class Status(val ready: Boolean, val angle: Int, val min: Int, val max: Int) : ServoResponse
     data class AngleAccepted(val angle: Int) : ServoResponse
     data class Error(val code: String, val detail: String) : ServoResponse
@@ -47,6 +48,16 @@ class ServoLineParser(private val maxLineLength: Int = 512) {
 
         fun parseLine(raw: String): ServoResponse {
             val line = raw.trim()
+            if (line.startsWith("DRIVE_STATE ")) {
+                val values = line.substringAfter(' ').split(Regex("\\s+")).mapNotNull { token ->
+                    val parts = token.split('=', limit = 2)
+                    if (parts.size == 2) parts[0] to parts[1] else null
+                }.toMap()
+                val ready = values["ready"]?.toIntOrNull()
+                val direction = values["direction"]
+                return if (ready in 0..1 && direction in setOf("forward", "backward", "stop"))
+                    ServoResponse.DriveStatus(ready == 1, direction!!) else ServoResponse.Invalid(line)
+            }
             if (line.equals("OK WIFI_SAVED", ignoreCase = true)) return ServoResponse.WifiSaved
             if (line.startsWith("OK CONFIG_SAVED mode=", ignoreCase = true)) {
                 return ServoResponse.ConfigSaved(line.substringAfter("mode=").trim())

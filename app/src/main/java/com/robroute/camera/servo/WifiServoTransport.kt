@@ -20,6 +20,9 @@ class WifiServoTransport(
         Thread(runnable, "ServoWiFi").apply { isDaemon = true }
     }
     private val commands = LinkedBlockingQueue<String>()
+    private data class DriveWrite(val command: String, val expiresAt: Long)
+    private val driveLock = Any()
+    private var pendingDrive: DriveWrite? = null
     @Volatile private var started = false
     @Volatile private var socket: Socket? = null
     @Volatile private var discoverySocket: DatagramSocket? = null
@@ -38,6 +41,11 @@ class WifiServoTransport(
     }
 
     override fun moveTo(angle: Int) = enqueue("S$angle")
+    override fun drive(action: String, expiresAt: Long) {
+        synchronized(driveLock) {
+            if (started && socket?.isConnected == true) pendingDrive = DriveWrite("DRIVE ${action.uppercase()}", expiresAt)
+        }
+    }
     override fun requestStatus() = enqueue("STATUS")
 
     override fun configureWifi(ssid: String, password: String) {
@@ -76,8 +84,11 @@ class WifiServoTransport(
                     )
                 }
             } finally {
-                socket?.let { try { it.close() } catch (_: Throwable) { } }
-                socket = null
+                synchronized(driveLock) {
+                    socket?.let { try { it.close() } catch (_: Throwable) { } }
+                    socket = null
+                    pendingDrive = null
+                }
                 commands.clear()
             }
         }
@@ -150,6 +161,8 @@ class WifiServoTransport(
 
         val buffer = ByteArray(512)
         while (started && !connected.isClosed) {
+            val drive = synchronized(driveLock) { pendingDrive.also { pendingDrive = null } }
+            if (drive != null && SystemClock.elapsedRealtime() <= drive.expiresAt) writeCommand(output, drive.command)
             var command = commands.poll()
             while (command != null) {
                 try {

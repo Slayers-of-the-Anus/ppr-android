@@ -92,6 +92,7 @@ class UsbSerialServoTransport(
     }
 
     override fun moveTo(angle: Int) = writeLine("S$angle")
+    override fun drive(action: String, expiresAt: Long) = writeLine("DRIVE ${action.uppercase()}", expiresAt)
     override fun requestStatus() = writeLine("STATUS")
     override fun configureWifi(ssid: String, password: String) {
         val ssidEncoded = Base64.encodeToString(ssid.toByteArray(StandardCharsets.UTF_8), Base64.NO_WRAP)
@@ -189,10 +190,14 @@ class UsbSerialServoTransport(
         }
     }
 
-    private fun writeLine(command: String) {
+    private fun writeLine(command: String, expiresAt: Long? = null) {
         if (!started) return
+        val originalPort = if (expiresAt != null) synchronized(lock) { port } else null
         executor.execute {
             val selectedPort = synchronized(lock) { port }
+            // Never replay motor commands queued before disconnect or past their lease.
+            if (expiresAt != null && (selectedPort !== originalPort ||
+                    android.os.SystemClock.elapsedRealtime() > expiresAt)) return@execute
             if (selectedPort == null) {
                 listener.onTransportError(ServoErrorCode.USB_DISCONNECTED, "USB serial device is not connected")
                 return@execute

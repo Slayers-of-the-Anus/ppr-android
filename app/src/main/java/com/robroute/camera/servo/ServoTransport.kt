@@ -37,6 +37,7 @@ interface ServoTransport {
     fun start()
     fun stop()
     fun moveTo(angle: Int)
+    fun drive(action: String, expiresAt: Long)
     fun requestStatus()
     fun configureWifi(ssid: String, password: String)
     fun configureMode(mode: String, ssid: String, password: String)
